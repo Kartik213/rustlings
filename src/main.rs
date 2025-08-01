@@ -26,6 +26,7 @@ mod exercise;
 mod project;
 mod run;
 mod verify;
+mod streak;
 
 /// Rustlings is a collection of small exercises to get you used to writing and reading Rust code
 #[derive(Parser)]
@@ -84,14 +85,11 @@ enum Subcommands {
     },
     /// Enable rust-analyzer for exercises
     Lsp,
+    Streak,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-
-    if args.command.is_none() {
-        println!("\n{WELCOME}\n");
-    }
 
     if which::which("rustc").is_err() {
         println!("We cannot find `rustc`.");
@@ -112,6 +110,12 @@ fn main() -> Result<()> {
     let exercises = toml_edit::de::from_str::<ExerciseList>(&info_file)
         .unwrap()
         .exercises;
+
+    if args.command.is_none() {
+        streak::display_streak(&exercises).ok();
+        println!("\n{WELCOME}\n");
+    }
+
     let verbose = args.nocapture;
 
     let command = args.command.unwrap_or_else(|| {
@@ -214,8 +218,13 @@ fn main() -> Result<()> {
         }
 
         Subcommands::Verify => {
-            verify(&exercises, (0, exercises.len()), verbose, false)
-                .unwrap_or_else(|_| std::process::exit(1));
+            if verify(&exercises, (0, exercises.len()), verbose, false).is_ok(){
+                if let Err(e) = streak::update_streak() {
+                    eprintln!("⚠️  Could not update streak: {e}");
+                }
+            } else {
+                std::process::exit(1);
+            }
         }
 
         Subcommands::Lsp => {
@@ -245,6 +254,11 @@ fn main() -> Result<()> {
                 println!("If you want to continue working on the exercises at a later point, you can simply run `rustlings watch` again");
             }
         },
+        Subcommands::Streak => {
+            if let Err(e) = streak::display_streak(&exercises) {
+                eprintln!("Failed to display streak: {e}");
+            }
+        },
     }
 
     Ok(())
@@ -253,8 +267,12 @@ fn main() -> Result<()> {
 fn spawn_watch_shell(
     failed_exercise_hint: Arc<Mutex<Option<String>>>,
     should_quit: Arc<AtomicBool>,
+    exercises: &[Exercise],
 ) {
     println!("Welcome to watch mode! You can type 'help' to get an overview of the commands you can use here.");
+    if let Err(e) = streak::display_streak(exercises) {
+        eprintln!("⚠️  Could not display streak: {e}");
+    }
 
     thread::spawn(move || {
         let mut input = String::with_capacity(32);
@@ -354,7 +372,7 @@ fn watch(
         Ok(_) => return Ok(WatchStatus::Finished),
         Err(exercise) => Arc::new(Mutex::new(Some(exercise.hint.clone()))),
     };
-    spawn_watch_shell(Arc::clone(&failed_exercise_hint), Arc::clone(&should_quit));
+    spawn_watch_shell(Arc::clone(&failed_exercise_hint), Arc::clone(&should_quit), exercises);
     loop {
         match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(event) => match event {
